@@ -16,14 +16,20 @@ app.get('/api/pollen', async (req, res) => {
     if (!lat || !lng) return res.status(400).json({ error: "Brak współrzędnych" });
 
     try {
-        // MAGIA: Równolegle pobieramy jakość powietrza (pyłki) oraz aktualną pogodę (deszcz/wiatr)
-        const [meteoRes, weatherRes] = await Promise.all([
-            axios.get(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lng}&current=alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen`),
-            axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,rain,showers,wind_speed_10m`)
-        ]);
+        // POBIERANIE PYŁKÓW
+        const meteoUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lng}&current=alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen&timezone=auto`;
+        const meteoRes = await axios.get(meteoUrl);
+        const currentData = meteoRes.data.current || {};
 
-        const currentData = meteoRes.data.current;
-        const weatherData = weatherRes.data.current;
+        // BEZPIECZNE POBIERANIE POGODY (jeśli API pogody padnie, serwer i tak wyśle pyłki)
+        let weatherData = {};
+        try {
+            const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,rain,showers,wind_speed_10m&timezone=auto`;
+            const weatherRes = await axios.get(weatherUrl);
+            weatherData = weatherRes.data.current || {};
+        } catch (e) {
+            console.error("Nie udało się pobrać pogody, ignoruję ten krok.");
+        }
 
         const rainTotal = (weatherData.rain || 0) + (weatherData.showers || 0);
         const windSpeed = weatherData.wind_speed_10m || 0;
@@ -33,13 +39,12 @@ app.get('/api/pollen', async (req, res) => {
         let weatherMessage = "Warunki pogodowe są neutralne dla alergików.";
         let isRaining = false;
 
-        // ANALIZA POGODY
         if (rainTotal > 0.5) {
-            weatherModifier = -2; // Deszcz drastycznie obniża stężenie pyłków!
+            weatherModifier = -2; 
             weatherMessage = "Pada deszcz! Woda zmywa pyłki z powietrza. Możesz bezpiecznie oddychać 🌧️.";
             isRaining = true;
         } else if (windSpeed > 20) {
-            weatherModifier = 1; // Wiatr podnosi zagrożenie
+            weatherModifier = 1;
             weatherMessage = "Uwaga na silny wiatr! Pyłki są agresywnie roznoszone po okolicy 🌬️.";
         }
 
@@ -52,7 +57,6 @@ app.get('/api/pollen', async (req, res) => {
             else if (wartosc < 100) idx = 3;
             else idx = 4;
 
-            // Zastosowanie korekty pogodowej, jeśli w ogóle coś pyli
             let finalIdx = idx;
             if (idx > 0) {
                 finalIdx = idx + weatherModifier;
@@ -75,12 +79,13 @@ app.get('/api/pollen', async (req, res) => {
                 { id: 'ragweed', name: 'Ambrozja', type: 'Chwast', ...obliczPoziom(currentData.ragweed_pollen) },
                 { id: 'olive', name: 'Oliwka', type: 'Drzewo', ...obliczPoziom(currentData.olive_pollen) }
             ],
-            generalAdvice: "Dane satelitarne (Copernicus) z inteligentną korektą pogodową."
+            generalAdvice: "Dane z satelity Copernicus + Pogoda na żywo."
         };
         res.status(200).json(responseData);
     } catch (error) {
-        res.status(500).json({ error: "Błąd API" });
+        console.error("Błąd główny API:", error.message);
+        res.status(500).json({ error: "Błąd API Open-Meteo" });
     }
 });
 
-app.listen(PORT, () => console.log(`🚀 Serwer działa!`));
+app.listen(PORT, () => console.log(`🚀 Serwer działa na porcie ${PORT}!`));
